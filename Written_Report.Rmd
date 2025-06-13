@@ -1,0 +1,334 @@
+---
+title: "Thien Pham Final Report"
+author: "Thien Pham"
+date: "2024-06-07"
+output:
+  html_document:
+    df_print: paged
+---
+
+# NOx Concentration in Polluted Areas
+
+# 1. Introduction
+
+The goal of the study is to study NOx relationship with other gases in polluted areas and predict NOx concentration level, as NOx is highly linked to air quality, as discussed by study 1, where descending to a certain critical breakpoint in NOx concentration results in the decline in "formation of secondary aerosol." Another purpose is to attempt to see if NOx concentration levels can be predicted purely through sensors, temperature, and humidity level.
+
+# 2. Description of Data
+
+**Description**: The data contains hourly sensor response averages along with gas concentration references from a certified analyzer. This data is collected from a gas multisensor device deployed on the field of an Italian city.
+
+| Variable Name | Description                                                   | Unit         |
+|---------------|---------------------------------------------------------------|--------------|
+| Date          | Date (day/month/year)                                         | NA           |
+| Time          | Time (hour:minute:second)                                     | NA           |
+| CO(GT)        | True hourly averaged concentration of Carbon Monoxide         | mg/m\^3      |
+| PT08.S1(CO)   | Tin oxide hourly averaged sensor response (CO targeted)       | NA           |
+| NMHC(GT)      | Non-Methane Hydrocarbons concentration                        | miccrog/m\^3 |
+| C6H6(GT)      | Benzene concentration                                         | microg/m\^3  |
+| PT08.S2(NMHC) | Titania hourly averaged sensor response (NMHC targeted)       | NA           |
+| NOx(GT)       | Nitrogen Oxides concentration                                 | ppb          |
+| PT08.S3(NOx)  | Tungsten oxide hourly averaged sensor response (NOx targeted) | NA           |
+| NO2(GT)       | Nitrogen Dioxide concentration                                | microg/m\^3  |
+| PT08.S4(NO2)  | Tungsten oxide hourly averaged sensor response (NO2 targeted) | NA           |
+| PT08.S5(O3)   | Indium oxide hourly averaged sensor response (O3 targeted)    | NA           |
+| T             | Temperature                                                   | °C           |
+| RH            | Relative Humidity                                             | \%           |
+| AH            | Absolute Humidity                                             | NA           |
+
+# 3. Exploratory Data Analysis
+
+-   Loading in Libraries and Dataset:
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(leaps)
+library(car)
+library(corrplot)
+
+data <- read.csv("AirQualityUCI (1).csv", header=T)
+```
+
+-   Summary Statistics of Response Variable:
+
+```{r}
+summary(data$NOx.GT.)
+```
+
+-   Data Cleaning:
+
+```{r}
+# Replace -200 values with "NA" so it does not affect mean calculation
+data[data == -200] <- NA
+
+# Calculate mean for each feature, exclude NA in mean calcuation
+feature_means <- data %>%
+  summarise(across(where(is.numeric), ~mean(., na.rm = TRUE)))
+
+# Replace NA with the mean of corresponding feature
+cleaned_data <- data %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), feature_means[[cur_column()]], .)))
+
+
+```
+
+-   Summary Statistics of Response Variable after Cleaning:
+
+```{r}
+summary(cleaned_data$NOx.GT.)
+```
+
+-   NOx, the response variable, is heavily positively correlated with NO2 concentration, C6H6 concentration, and three sensors. It is also negatively correlated with its corresponding sensor (the sensor for NOx).
+
+```{r}
+cleaned_data_no_time_eda <- select(cleaned_data, -Date, -Time)
+cor_matrix <- cor(cleaned_data_no_time_eda)
+corrplot(cor_matrix, method = "circle", type = "upper", order = "hclust",
+         tl.col = "black", tl.srt = 45)
+
+```
+
+-   Scatter Plot of All Variables Versus NOx(response):
+
+```{r}
+variables <- names(cleaned_data_no_time_eda)
+for (var in variables) {
+  if (var != "NOx.GT.") {
+    p <- ggplot(cleaned_data_no_time_eda, aes_string(x="NOx.GT.", y=var)) +
+        geom_point() +
+        ggtitle(paste("NOx.GT. vs", var)) +
+        xlab("NOx.GT.") +
+        ylab(var)
+      print(p)
+  }
+}
+```
+
+# 4. Distributions of response variables and statistical models
+
+-   Distribution of Response Variable and Transformed Response Variable:
+
+```{r}
+hist(cleaned_data$NOx.GT.)
+hist(sqrt(cleaned_data$NOx.GT.))
+```
+
+**Model Building:**
+
+-   Removal of Date and Time, and Transformation of Response Variable:
+
+```{r}
+cleaned_data$NOx.GT. <- sqrt(cleaned_data$NOx.GT.)
+cleaned_data_no_time <- select(cleaned_data, -Date, -Time)
+```
+
+-   Stepwise Regression, both directions:
+
+    -   Null Model: One Feature
+
+    -   Full Model: All first-order features
+
+```{r}
+null_model <- lm(NOx.GT. ~ PT08.S3.NOx., data = cleaned_data_no_time)
+full_model <- lm(NOx.GT.~., data = cleaned_data_no_time)
+step_model1 <- step(null_model, scope = list(lower = null_model, upper = full_model), direction = "both", test = "F")
+summary(step_model1)
+step_model2 <- step(full_model, scope = list(lower = null_model, upper = full_model), direction = "both",test="F")
+summary(step_model2)
+cleaned_data_no_time_all <- regsubsets(NOx.GT. ~ ., data = cleaned_data_no_time, nbest = 1, nvmax = 15)
+summary(cleaned_data_no_time_all)$which
+summary(cleaned_data_no_time_all)$rsq
+summary(cleaned_data_no_time_all)$adjr2
+```
+
+-   Multicollinearity:
+
+```{r}
+model = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + C6H6.GT. + 
+    PT08.S2.NMHC. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + 
+    T + RH + AH, data = cleaned_data_no_time)
+vif(model)
+
+# Remove C6H6.GT.
+model1 = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + 
+    PT08.S2.NMHC. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + 
+    T + RH + AH, data = cleaned_data_no_time)
+vif(model1)
+
+# Remove Sensor for NMHC
+model2 = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + 
+    T + RH + AH, data = cleaned_data_no_time)
+vif(model2)
+
+# Remove Temp
+model3 = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + RH + AH, data = cleaned_data_no_time)
+vif(model3)
+
+# Remove CO sensor
+model4 = lm(formula = NOx.GT. ~ CO.GT. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + RH + AH, data = cleaned_data_no_time)
+vif(model4)
+
+# Remove O3 sensor
+model5 = lm(formula = NOx.GT. ~ CO.GT. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + RH + AH, data = cleaned_data_no_time)
+vif(model5)
+
+```
+
+-   VIF and Summary of Final Model:
+
+```{r}
+summary(model5)
+vif(model5)
+```
+
+# 5. Rationale of the fitted model.
+
+**Final Model:**
+
+$\sqrt{\text{NOx(GT)}} = 9.4505 + 1.9672 \cdot X_1 - 0.0047 \times \cdot X_2 - 0.0038 \times \cdot X_3 + 0.0636 \times \cdot X_4 - 0.0041 \times \cdot X_5 + 0.0579 \times \cdot X_6 + 1.0297 \times \cdot X_7$
+
+Where,
+
+$X_1$ = $\text{CO(GT)}$: For every unit of increase in Carbon Monoxide concentration, the square root of NOx concentration is increased by 1.9672.
+
+$X_2$ = $\text{NMHC(GT)}$: For every unit of increase in Non-Methane Hydrocarbons concentration , the square root of NOx concentration is decreased by 0.0047.
+
+$X_3$ = $\text{PT08.S3(NOx)}$: For every unit of increase in sensor response for NOx, the square root of NOx concentration is decreased by 0.0038.
+
+$X_4$ = $NO_2\text{(GT)}$: For every unit of increase in Nitrogen Dioxide concentration, the square root of NOx concentration is increased by 0.0636
+
+$X_5$ = $\text{PT08.S4(NO2)}$: For every unit of increase in sensor response for NO2, the square root of NOx concentration is decreased by 0.0041.
+
+$X_6$ = $\text{RH}$: For every unit of increase in relative humidity, the square root of NOx concentration is increased by 0.0579
+
+$X_7$ = $\text{AH}$: For every unit of increase in absolute humidity, the square root of NOx concentration is increased by 1.0297
+
+# 6. Results of the data analysis, including tables and figures.
+
+**Model Constant Variance Assumptions:**
+
+-   Constant Variance and Normal Residuals Satisfied
+
+```{r}
+plot(model5, which = 1)
+```
+
+**Normality Assumption:**
+
+-   Normality Assumption Satisfied
+
+```{r}
+plot(model5, which = 2)
+```
+
+-   **Outlier:**
+
+```{r}
+plot(model5, which = 4)
+```
+
+# 7. Conclusions and discussion.
+
+The model had a high adjusted $R^2$ value of 0.8161, meaning that 81% of the variation in NOx concentration is explained by the predictors. The strongest predictors were CO concentration and humidity levels. Predicting NOx concentration relied on three sensors, including itself, the concentration of other particles that contained oxygen, and humidity levels. At one point, it was theorized that NOx's negative correlation with absolute humidity is explained by conditions that existed at higher humidity levels, such as increased increased formation of clouds due to more increased water vapor volume; this can cause the NOx concentration to disperse as a result. This result makes sense, however, NOx is positively correlated with relative humidity, which conflicts with the previous learning. The model is only effective in polluted areas similar to condition from this dataset. It is difficult to generalize the model as the data was taken from highly polluted areas in Italy. The conditions in other areas may affect the model's ability to accurate predict NOx concentration.
+
+# 8. Appendix: References and Program code (SAS or R).
+
+-   (Study 1): [Response of biogenic secondary organic aerosol formation to anthropogenic NOx emission mitigation](https://www.sciencedirect.com/science/article/pii/S004896972402285X)
+
+    -   Li, J., Chen, T., Zhang, H., Jia, Y., Chu, Y., Yan, Y., Zhang, H., Ren, Y., Li, H., Hu, J., Wang, W., Chu, B., Ge, M., & He, H. (2024). Nonlinear effect of NO concentration decrease on secondary aerosol formation in the Beijing-Tianjin-Hebei region: Evidence from smog chamber experiments and field observations. *Science of the Total Environment*, *912*, 168333. <https://doi.org/10.1016/j.scitotenv.2023.168333>
+
+```{r}
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(leaps)
+library(car)
+library(corrplot)
+
+data <- read.csv("AirQualityUCI (1).csv", header=T)
+
+summary(data$NOx.GT.)
+
+# Replace -200 values with "NA" so it does not affect mean calculation
+data[data == -200] <- NA
+
+# Calculate mean for each feature, exclude NA in mean calculation
+feature_means <- data %>%
+  summarise(across(where(is.numeric), ~mean(., na.rm = TRUE)))
+
+# Replace NA with the mean of corresponding feature
+cleaned_data <- data %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), feature_means[[cur_column()]], .)))
+
+cleaned_data_no_time_eda <- select(cleaned_data, -Date, -Time)
+cor_matrix <- cor(cleaned_data_no_time_eda)
+corrplot(cor_matrix, method = "circle", type = "upper", order = "hclust",
+         tl.col = "black", tl.srt = 45)
+
+# Plot response variable against every other variable 
+variables <- names(cleaned_data_no_time_eda)
+for (var in variables) {
+  if (var != "NOx.GT.") {
+    p <- ggplot(cleaned_data_no_time_eda, aes_string(x="NOx.GT.", y=var)) +
+        geom_point() +
+        ggtitle(paste("NOx.GT. vs", var)) +
+        xlab("NOx.GT.") +
+        ylab(var)
+      print(p)
+  }
+}
+
+hist(cleaned_data$NOx.GT.)
+hist(sqrt(cleaned_data$NOx.GT.))
+
+cleaned_data$NOx.GT. <- sqrt(cleaned_data$NOx.GT.)
+cleaned_data_no_time <- select(cleaned_data, -Date, -Time)
+
+null_model <- lm(NOx.GT. ~ PT08.S3.NOx., data = cleaned_data_no_time)
+full_model <- lm(NOx.GT.~., data = cleaned_data_no_time)
+step_model1 <- step(null_model, scope = list(lower = null_model, upper = full_model), direction = "both", test = "F")
+summary(step_model1)
+step_model2 <- step(full_model, scope = list(lower = null_model, upper = full_model), direction = "both",test="F")
+summary(step_model2)
+cleaned_data_no_time_all <- regsubsets(NOx.GT. ~ ., data = cleaned_data_no_time, nbest = 1, nvmax = 15)
+summary(cleaned_data_no_time_all)$which
+summary(cleaned_data_no_time_all)$rsq
+summary(cleaned_data_no_time_all)$adjr2
+
+model = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + C6H6.GT. + 
+    PT08.S2.NMHC. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + 
+    T + RH + AH, data = cleaned_data_no_time)
+vif(model)
+
+# Remove C6H6.GT.
+model1 = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + 
+    PT08.S2.NMHC. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + 
+    T + RH + AH, data = cleaned_data_no_time)
+vif(model1)
+
+# Remove Sensor for NMHC
+model2 = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + 
+    T + RH + AH, data = cleaned_data_no_time)
+vif(model2)
+
+# Remove Temp
+model3 = lm(formula = NOx.GT. ~ CO.GT. + PT08.S1.CO. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + RH + AH, data = cleaned_data_no_time)
+vif(model3)
+
+# Remove CO sensor
+model4 = lm(formula = NOx.GT. ~ CO.GT. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + PT08.S5.O3. + RH + AH, data = cleaned_data_no_time)
+vif(model4)
+
+# Remove O3 sensor
+model5 = lm(formula = NOx.GT. ~ CO.GT. + NMHC.GT. + PT08.S3.NOx. + NO2.GT. + PT08.S4.NO2. + RH + AH, data = cleaned_data_no_time)
+vif(model5)
+
+summary(model5)
+
+plot(model5, which = 1)
+plot(model5, which = 2)
+plot(model5, which = 4)
+```
